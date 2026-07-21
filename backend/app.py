@@ -36,8 +36,9 @@ from flask_sqlalchemy import SQLAlchemy
 from config import get_config
 from database import init_db, shutdown_session
 from utils import setup_logging, emit_event, logger
+from core.event_bus import event_bus
 
-from api import api_bp
+from api import api_bp, workflow_bp
 from agents import agents_bp
 from scheduler import scheduler_bp, start_scheduler
 
@@ -59,10 +60,14 @@ def create_app():
 
     # Register blueprints
     app.register_blueprint(api_bp)
+    app.register_blueprint(workflow_bp)
     app.register_blueprint(agents_bp)
     app.register_blueprint(scheduler_bp)
 
-    # Initialize database
+    # Inject socketio into the event bus for real-time broadcasts
+    event_bus.set_socketio(socketio)
+
+    # Initialize database (Phase 1 — still used by legacy endpoints)
     init_db()
     logger.info("database initialized at %s", app.config["SQLALCHEMY_DATABASE_URI"])
 

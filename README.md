@@ -1,111 +1,126 @@
 # NeuroOps - Autonomous AI Workforce for Software Teams
 
-Phase 1 foundation: a modular Flask + Socket.IO backend with a SQLite database
-and a vanilla JavaScript frontend dashboard.
+An autonomous multi-agent AI system. A user submits one request; a CEO Agent
+analyzes it, a Task Planner builds a DAG, a Scheduler activates only the
+required agents, agents collaborate in parallel, and the CEO merges all
+outputs into a final report — all streamed in real time.
 
 ## Tech Stack
 
-- **Backend**: Python, Flask, Flask-SocketIO, SQLAlchemy, SQLite
-- **Frontend**: HTML, CSS, Vanilla JavaScript (no React, Next.js, Firebase, or Supabase)
+- **Backend**: Python, Flask, Flask-SocketIO, LangGraph, SQLAlchemy, SQLite
+- **Frontend**: HTML, CSS, Vanilla JavaScript, Three.js
+- **No React, Next.js, Firebase, or Supabase**
+
+## Architecture
+
+```
+User Request
+  -> CEO Agent (analyze intent, identify departments)
+  -> Task Planner (build task DAG with dependencies)
+  -> Scheduler (wake only required agents, execute in parallel, respect deps)
+  -> AI Agents (Engineering, Design, Research, Management, Communication, Memory)
+  -> Result Collection
+  -> CEO Agent (synthesize final report)
+  -> Final Response
+```
 
 ## Folder Structure
 
 ```
-neuroops/
-├── backend/
-│   ├── app.py              # Flask + Socket.IO entry point
-│   ├── config.py           # Configuration (dev/prod/test)
-│   ├── requirements.txt    # Python dependencies
-│   ├── api/                # REST API blueprint (tasks, health, stats)
-│   ├── agents/             # Agent management blueprint + memory endpoints
-│   ├── scheduler/          # Scheduler blueprint + background runner
-│   ├── services/           # AgentService, TaskService
-│   ├── memory/             # MemoryService (persistent + in-memory cache)
-│   ├── database/           # SQLAlchemy engine, session, Base
-│   ├── models/             # Agent, Task, MemoryEntry, ScheduleEntry
-│   └── utils/              # Logging, error handling, emit helpers
-├── frontend/
-│   ├── index.html          # Dashboard UI
-│   ├── style.css           # Theme + responsive layout
-│   └── script.js           # REST + Socket.IO client
-├── assets/
-└── package.json            # build/start scripts
+backend/
+├── app.py                  # Flask + Socket.IO entry point
+├── config.py               # Configuration
+├── requirements.txt
+├── core/                   # Phase 2 intelligence layer
+│   ├── models.py            # Task, AgentState, AgentResult, TimelineEvent
+│   ├── storage.py           # In-memory SessionStore (isolated, DB-ready)
+│   ├── event_bus.py         # Socket.IO event broadcaster
+│   ├── base_agent.py        # BaseAgent contract (think, emit, return result)
+│   ├── ceo_agent.py         # CEO: analyze, plan, delegate, synthesize
+│   ├── task_planner.py      # Request -> structured task DAG
+│   ├── scheduler_service.py # Parallel exec, deps, retries, timeouts
+│   └── workflow.py          # LangGraph StateGraph workflow
+├── agents/                 # AI agents (one contract, 11 types)
+│   ├── registry.py          # agent_type -> class mapping
+│   ├── engineering.py       # CodeWriter, Debugger, Reviewer, Documentation
+│   ├── design.py            # UISuggestion, Wireframe
+│   ├── research.py          # DocumentSearch, Summarizer
+│   └── support_agents.py    # TaskPlanner, Notification, Memory
+├── api/                    # REST blueprints
+│   ├── routes.py            # Phase 1 health/stats/tasks
+│   └── workflow_routes.py   # Phase 2 workflow endpoints
+├── scheduler/              # Phase 1 cron-style scheduler
+├── services/               # Phase 1 agent/task services
+├── memory/                 # Phase 1 memory service
+├── database/               # SQLAlchemy connection
+├── models/                 # Phase 1 ORM models
+└── utils/                  # Logging, error handling
+frontend/
+├── index.html              # Dashboard with 3D viz
+├── style.css               # Dark theme, responsive
+└── script.js               # REST + Socket.IO + Three.js client
+assets/
 ```
 
-## Getting Started
+## AI Agents
 
-### Install dependencies
-```bash
-pip install -r backend/requirements.txt
-```
+| Department | Agent | Purpose |
+|-----------|-------|---------|
+| Engineering | CodeWriter | Writes code from specs |
+| Engineering | Debugger | Finds and fixes bugs |
+| Engineering | Reviewer | Reviews code quality |
+| Engineering | Documentation | Generates docs |
+| Design | UISuggestion | Suggests UI improvements |
+| Design | Wireframe | Text-based wireframes |
+| Research | DocumentSearch | Searches documents |
+| Research | Summarizer | Condenses text |
+| Management | TaskPlanner | Decomposes requests |
+| Communication | Notification | Formats notifications |
+| Memory | Memory | Stores session summaries |
 
-### Run the server
-```bash
-python3 backend/app.py
-# or
-npm start
-```
+Every agent follows the same contract: receive structured task, think, return
+output + confidence + logs + execution time, emit state transitions.
 
-The server starts on `http://localhost:5000` (override with `PORT=<port>`).
-The SQLite database (`backend/neuroops.db`) is created automatically on first run.
+## Agent States
 
-### Build check
-```bash
-npm run build
-```
+`sleeping` -> `thinking` -> `working` -> `completed` | `failed` | `waiting_approval`
 
-## API Reference
+Every transition is emitted via Socket.IO as `neuroops:event`.
 
-### Core
+## REST API (Phase 2)
+
 | Method | Path | Description |
 |--------|------|-------------|
-| GET  | `/api/health` | Health check |
-| GET  | `/api/stats` | Counts of agents, tasks, schedules |
-
-### Tasks
-| Method | Path | Description |
-|--------|------|-------------|
-| GET    | `/api/tasks` | List tasks (filter with `?status=`) |
-| POST   | `/api/tasks` | Create task `{title, description, priority}` |
-| GET    | `/api/tasks/<id>` | Get a task |
-| DELETE | `/api/tasks/<id>` | Delete a task |
-| POST   | `/api/tasks/<id>/complete` | Mark complete `{result}` |
-
-### Agents
-| Method | Path | Description |
-|--------|------|-------------|
-| GET    | `/api/agents` | List agents |
-| POST   | `/api/agents` | Register `{name, role, capabilities, config}` |
-| GET    | `/api/agents/<id>` | Get an agent |
-| POST   | `/api/agents/<id>/heartbeat` | Update heartbeat |
-| POST   | `/api/agents/<id>/assign/<task_id>` | Assign a task |
-| GET    | `/api/agents/<id>/memory` | Recall memories (`?category=`) |
-| POST   | `/api/agents/<id>/memory` | Store `{category, content, metadata}` |
-| DELETE | `/api/memory/<id>` | Forget a memory |
-
-### Scheduler
-| Method | Path | Description |
-|--------|------|-------------|
-| GET    | `/api/scheduler` | List schedules |
-| POST   | `/api/scheduler` | Create `{name, task_title, interval_seconds}` |
-| DELETE | `/api/scheduler/<id>` | Delete a schedule |
-| POST   | `/api/scheduler/<id>/toggle` | Enable/disable |
+| POST | `/api/workflow/submit` | Submit a request to the autonomous workflow |
+| GET | `/api/workflow/tasks` | Get current tasks |
+| GET | `/api/workflow/agents` | Get agent states + registry |
+| GET | `/api/workflow/timeline` | Get timeline events |
+| GET | `/api/workflow/session` | Get session info + conversation + memory |
+| POST | `/api/workflow/reset` | Reset the session |
+| GET | `/api/workflow/registry` | List all agent types |
 
 ## Socket.IO Events
 
-- `server:hello` - emitted on connect
-- `server:pong` - response to `client:ping`
-- `scheduler:fired` - emitted when a scheduled job creates a task
+All events broadcast on the `neuroops:event` channel:
+- `workflow:started`, `workflow:completed`, `workflow:failed`
+- `ceo:started`, `ceo:analysis`, `ceo:planning`, `ceo:completed`
+- `planner:started`, `planner:completed`
+- `task:created`, `task:finished`, `task:failed`, `task:retry`, `task:timeout`
+- `scheduler:started`, `scheduler:wave`, `scheduler:completed`
+- `agent:activated`, `agent:thinking`, `agent:working`, `agent:completed`, `agent:failed`
 
-## Architecture Notes
+## Getting Started
 
-- **Modular blueprints**: `api`, `agents`, `scheduler` are independent Flask blueprints.
-- **MemoryService**: persistent storage in `memory_entries` plus an in-memory ring buffer for fast recall.
-- **Scheduler**: a daemon thread polls `ScheduleEntry` rows and creates tasks when due, emitting Socket.IO events.
-- **Database**: SQLAlchemy with SQLite; tables auto-created via `init_db()` on startup.
+```bash
+pip install -r backend/requirements.txt
+python3 backend/app.py
+```
 
-## Phase 1 Status
+Open `http://localhost:5000`, type a request, and click "Deploy Workforce".
 
-This phase delivers the complete project foundation: folder structure, Flask app,
-SQLAlchemy + SQLite database, Socket.IO real-time layer, modular blueprints,
-Memory Service, scheduler, services, utils, and a connected frontend dashboard.
+## Design for Future Phases
+
+The storage layer (`core/storage.py`) is isolated behind `SessionStore`. To add
+SQLite/PostgreSQL, replace the in-memory dicts with DB queries — agent and
+workflow logic stays unchanged. Vector DB and long-term memory can plug into
+the Memory agent. Auth can wrap the workflow blueprint.
