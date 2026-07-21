@@ -2,8 +2,11 @@
 from .models import (
     AgentState,
     AgentResult,
+    ApprovalRequest,
     ConversationMessage,
     Department,
+    MemoryEntry,
+    MemoryType,
     Priority,
     Task,
     TaskStatus,
@@ -13,8 +16,11 @@ from .models import (
 __all__ = [
     "AgentState",
     "AgentResult",
+    "ApprovalRequest",
     "ConversationMessage",
     "Department",
+    "MemoryEntry",
+    "MemoryType",
     "Priority",
     "Task",
     "TaskStatus",

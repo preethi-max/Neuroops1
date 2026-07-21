@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial=device-width, initial-scale=1.0" />
   <title>NeuroOps - Autonomous AI Workforce</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,49 +20,55 @@
       </div>
       <div>
         <h1>NeuroOps</h1>
-        <span class="tagline">Autonomous AI Workforce for Software Teams</span>
+        <span class="tagline">Autonomous AI Workforce - Phase 3</span>
       </div>
     </div>
     <div class="status-cluster">
       <span id="ws-status" class="pill pill-offline">Socket: Disconnected</span>
       <span id="workflow-status" class="pill pill-idle">Workflow: Idle</span>
+      <span id="model-provider" class="pill pill-info">Model: stub</span>
     </div>
   </header>
 
   <main class="layout">
-    <!-- Request input -->
     <section class="request-bar">
       <form id="request-form">
-        <input type="text" id="request-input" placeholder="Describe what you want the AI workforce to build, fix, or research..." required autocomplete="off" />
+        <input type="text" id="request-input" placeholder="Describe what you want the AI workforce to build, fix, test, or research..." required autocomplete="off" />
         <button type="submit" id="submit-btn" class="btn btn-primary">Deploy Workforce</button>
         <button type="button" id="reset-btn" class="btn btn-ghost">Reset</button>
       </form>
     </section>
 
-    <!-- Stats -->
     <section class="stats-grid">
       <div class="stat-card"><span class="stat-label">Tasks</span><span id="stat-tasks" class="stat-value">0</span></div>
       <div class="stat-card"><span class="stat-label">Agents Active</span><span id="stat-agents" class="stat-value">0</span></div>
       <div class="stat-card"><span class="stat-label">Events</span><span id="stat-events" class="stat-value">0</span></div>
       <div class="stat-card"><span class="stat-label">Memory</span><span id="stat-memory" class="stat-value">0</span></div>
+      <div class="stat-card"><span class="stat-label">Success Rate</span><span id="stat-success" class="stat-value">-</span></div>
+      <div class="stat-card"><span class="stat-label">Avg Confidence</span><span id="stat-confidence" class="stat-value">-</span></div>
     </section>
 
-    <!-- 3D Visualization + Agent Grid -->
     <section class="viz-row">
       <div class="panel viz-panel">
         <div class="panel-head"><h2>Neuro Visualization Engine</h2><span class="hint">3D Agent Network</span></div>
         <div id="three-canvas" class="three-container"></div>
+        <div class="viz-legend">
+          <span><span class="dot dot-sleeping"></span>Sleeping</span>
+          <span><span class="dot dot-thinking"></span>Thinking</span>
+          <span><span class="dot dot-working"></span>Working</span>
+          <span><span class="dot dot-completed"></span>Completed</span>
+          <span><span class="dot dot-failed"></span>Failed</span>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Agent States</h2></div>
-        <div id="agent-grid" class="agent-grid"><p class="empty">No agents activated yet.</p></div>
+        <div class="panel-head"><h2>Agent Registry</h2><span class="hint" id="registry-count">0 agents</span></div>
+        <div id="agent-grid" class="agent-grid"><p class="empty">Loading registry...</p></div>
       </div>
     </section>
 
-    <!-- Task DAG + Event Stream -->
     <section class="panels">
       <div class="panel">
-        <div class="panel-head"><h2>Task Pipeline</h2><span class="hint" id="dag-hint">DAG</span></div>
+        <div class="panel-head"><h2>Task Execution Pipeline</h2><span class="hint" id="dag-hint">DAG</span></div>
         <div id="task-pipeline" class="task-pipeline"><p class="empty">Submit a request to see the task DAG.</p></div>
       </div>
       <div class="panel">
@@ -71,15 +77,30 @@
       </div>
     </section>
 
-    <!-- CEO Final Report -->
+    <section class="panels">
+      <div class="panel">
+        <div class="panel-head"><h2>Memory Timeline</h2><span class="hint" id="memory-count">0 entries</span></div>
+        <div id="memory-timeline" class="memory-timeline"><p class="empty">No memory stored yet.</p></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Performance Dashboard</h2></div>
+        <div id="performance-dashboard" class="performance-dashboard"><p class="empty">No performance data yet.</p></div>
+      </div>
+    </section>
+
     <section class="panel wide">
       <div class="panel-head"><h2>CEO Final Report</h2><span id="report-status" class="hint">Awaiting workflow</span></div>
       <div id="final-report" class="final-report"><p class="empty">The CEO will synthesize a final report after the workforce completes all tasks.</p></div>
     </section>
+
+    <section class="panel wide" id="approval-section" style="display:none;">
+      <div class="panel-head"><h2>Human Approval Queue</h2><span class="hint">Waiting for your decision</span></div>
+      <div id="approval-queue" class="approval-queue"></div>
+    </section>
   </main>
 
   <footer class="footer">
-    <span>NeuroOps Phase 2 - Autonomous Multi-Agent Intelligence</span>
+    <span>NeuroOps Phase 3 - Autonomous Multi-Agent Intelligence with Dynamic Agent Selection</span>
     <span id="clock"></span>
   </footer>
 

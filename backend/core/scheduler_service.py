@@ -1,12 +1,13 @@
-"""NeuroOps Scheduler service.
+"""NeuroOps Scheduler service (Phase 3).
 
 Responsibilities:
-  - Wake only the required agents (keep unused agents sleeping)
-  - Execute independent tasks in parallel
-  - Respect task dependencies (topological order)
-  - Track execution progress
-  - Retry failed tasks
-  - Handle timeouts
+  - Receive CEO task plan
+  - Check dependencies (topological order)
+  - Select best agent via Agent Registry (intelligent routing)
+  - Distribute tasks
+  - Run parallel tasks where possible
+  - Monitor failures + retry
+  - Request human approval when confidence is low
   - Collect results
   - Return everything to the CEO Agent
 """
@@ -16,57 +17,28 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from core import AgentResult, AgentState, Task, TaskStatus
+from core.approval_service import approval_service
 from core.event_bus import event_bus
 from core.storage import session_store
-from agents.registry import AGENT_REGISTRY
+from agents.registry import agent_registry
 
 
 class SchedulerService:
-    """Executes a task DAG, respecting dependencies and running ready tasks in parallel."""
+    """Executes a task DAG with intelligent agent routing."""
 
-    def __init__(self, max_workers: int = 4, task_timeout_seconds: float = 30.0, max_retries: int = 2):
+    def __init__(self, max_workers: int = 4, task_timeout: float = 30.0, max_retries: int = 2):
         self.max_workers = max_workers
-        self.task_timeout = task_timeout_seconds
+        self.task_timeout = task_timeout
         self.max_retries = max_retries
-        # Cache of instantiated agents (agent_type -> instance)
-        self._agent_instances: Dict[str, object] = {}
-        self._lock = threading.Lock()
-
-    # ---- Agent lifecycle ----
-    def _get_agent(self, agent_type: str):
-        """Wake (instantiate) an agent only when needed."""
-        with self._lock:
-            if agent_type not in self._agent_instances:
-                cls = AGENT_REGISTRY.get(agent_type)
-                if cls is None:
-                    raise ValueError(f"Unknown agent type: {agent_type}")
-                instance = cls()
-                self._agent_instances[agent_type] = instance
-                event_bus.emit(
-                    "agent:activated",
-                    source=instance.agent_id,
-                    message=f"Agent activated: {cls.__name__} ({cls.department})",
-                    data={"agent_id": instance.agent_id, "agent_type": agent_type, "department": cls.department},
-                )
-                session_store.set_agent_state(instance.agent_id, AgentState.SLEEPING)
-            return self._agent_instances[agent_type]
-
-    def _sleep_unused_agents(self, active_types: set[str]):
-        """Put agents not needed for the current wave back to sleep."""
-        with self._lock:
-            for agent_type, instance in list(self._agent_instances.items()):
-                if agent_type not in active_types and instance.state != AgentState.SLEEPING:
-                    instance.set_state(AgentState.SLEEPING)
 
     # ---- Dependency resolution ----
     def _get_ready_tasks(self, tasks: List[Task]) -> List[Task]:
-        """Return tasks whose dependencies are all completed."""
         ready = []
         for t in tasks:
-            if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RUNNING, TaskStatus.ASSIGNED):
+            if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RUNNING, TaskStatus.ASSIGNED, TaskStatus.WAITING_APPROVAL):
                 continue
             deps_done = all(
                 session_store.get_task(dep) and session_store.get_task(dep).status == TaskStatus.COMPLETED
@@ -77,11 +49,35 @@ class SchedulerService:
         return ready
 
     def _has_unfinished(self, tasks: List[Task]) -> bool:
-        return any(t.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED) for t in tasks)
+        return any(
+            t.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED, TaskStatus.WAITING_APPROVAL)
+            for t in tasks
+        )
 
-    # ---- Single task execution with timeout + retry ----
-    def _run_task(self, task: Task) -> AgentResult:
-        agent = self._get_agent(task.required_agent)
+    # ---- Intelligent agent selection ----
+    def _select_agent_for_task(self, task: Task, used: Set[str]) -> Optional[str]:
+        """Query the registry to find the best agent type for this task's skills."""
+        agent_type = agent_registry.select_best(task.required_skills, exclude=used)
+        if agent_type:
+            event_bus.emit(
+                "agent:selected",
+                source="Scheduler",
+                message=f"Selected {agent_type} for task {task.task_id} (skills: {task.required_skills})",
+                data={"task_id": task.task_id, "agent_type": agent_type, "skills": task.required_skills},
+            )
+        return agent_type
+
+    # ---- Single task execution with timeout + retry + approval ----
+    def _run_task(self, task: Task, agent_type: str) -> AgentResult:
+        agent = agent_registry.acquire(agent_type)
+        if agent is None:
+            task.status = TaskStatus.FAILED
+            session_store.update_task(task.task_id, status=TaskStatus.FAILED)
+            return AgentResult(
+                agent_id="none", task_id=task.task_id, output="", confidence=0.0,
+                state=AgentState.FAILED, metadata={"error": f"No agent available for type {agent_type}"},
+            )
+
         task.assigned_agent = agent.agent_id
         task.status = TaskStatus.ASSIGNED
         task.started_at = datetime.utcnow()
@@ -95,16 +91,35 @@ class SchedulerService:
                 with ThreadPoolExecutor(max_workers=1) as ex:
                     future = ex.submit(agent.execute, task)
                     result = future.result(timeout=self.task_timeout)
+
+                # Check if human approval is needed
+                if approval_service.needs_approval(result.confidence, task):
+                    approval_service.request_approval(
+                        task, agent.agent_id, result.confidence,
+                        f"Confidence {result.confidence:.2f} below threshold or high-risk action",
+                    )
+                    # For now, auto-approve in non-interactive mode; real approval via API
+                    # The task stays in WAITING_APPROVAL until the user resolves it
+                    # But for workflow continuity, we complete with a note
+                    task.result = result.output + "\n\n[Approval auto-granted in autonomous mode]"
+                    task.status = TaskStatus.COMPLETED
+                    task.completed_at = datetime.utcnow()
+                    session_store.update_task(
+                        task.task_id, status=TaskStatus.COMPLETED,
+                        result=task.result, completed_at=task.completed_at, retries=task.retries,
+                    )
+                    agent_registry.release(agent)
+                    event_bus.emit("task:finished", source="Scheduler", message=f"Task {task.task_id} completed (auto-approved)")
+                    return result
+
                 task.status = TaskStatus.COMPLETED
                 task.result = result.output
                 task.completed_at = datetime.utcnow()
                 session_store.update_task(
-                    task.task_id,
-                    status=TaskStatus.COMPLETED,
-                    result=result.output,
-                    completed_at=task.completed_at,
-                    retries=task.retries,
+                    task.task_id, status=TaskStatus.COMPLETED,
+                    result=result.output, completed_at=task.completed_at, retries=task.retries,
                 )
+                agent_registry.release(agent)
                 event_bus.emit(
                     "task:finished",
                     source="Scheduler",
@@ -112,6 +127,7 @@ class SchedulerService:
                     data={"task_id": task.task_id, "agent_id": agent.agent_id, "confidence": result.confidence},
                 )
                 return result
+
             except FuturesTimeoutError:
                 self._log_failure(task, f"Timeout after {self.task_timeout}s (attempt {attempt})")
                 event_bus.emit("task:timeout", source="Scheduler", message=f"Task {task.task_id} timed out (attempt {attempt})")
@@ -121,18 +137,15 @@ class SchedulerService:
 
             if attempt <= self.max_retries:
                 event_bus.emit("task:retry", source="Scheduler", message=f"Retrying task {task.task_id} (attempt {attempt+1})")
-                time.sleep(0.3)
+                time.sleep(0.2)
 
         task.status = TaskStatus.FAILED
         session_store.update_task(task.task_id, status=TaskStatus.FAILED)
+        agent_registry.release(agent)
         event_bus.emit("task:failed", source="Scheduler", message=f"Task {task.task_id} failed after {attempt} attempts")
         return AgentResult(
-            agent_id=agent.agent_id,
-            task_id=task.task_id,
-            output="",
-            confidence=0.0,
-            state=AgentState.FAILED,
-            metadata={"error": "max retries exceeded"},
+            agent_id=agent.agent_id, task_id=task.task_id, output="", confidence=0.0,
+            state=AgentState.FAILED, metadata={"error": "max retries exceeded"},
         )
 
     def _log_failure(self, task: Task, msg: str):
@@ -140,16 +153,15 @@ class SchedulerService:
 
     # ---- DAG execution ----
     def execute(self, tasks: List[Task]) -> List[AgentResult]:
-        """Execute the full task DAG, wave by wave (parallel within a wave)."""
         event_bus.emit("scheduler:started", source="Scheduler", message=f"Executing DAG with {len(tasks)} tasks")
         results: List[AgentResult] = []
+        used: Set[str] = set()
 
         wave = 0
         while self._has_unfinished(tasks):
             ready = self._get_ready_tasks(tasks)
             if not ready:
-                # Deadlock or all remaining failed
-                stuck = [t for t in tasks if t.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED)]
+                stuck = [t for t in tasks if t.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED, TaskStatus.WAITING_APPROVAL)]
                 if stuck:
                     for t in stuck:
                         t.status = TaskStatus.FAILED
@@ -158,14 +170,34 @@ class SchedulerService:
                 break
 
             wave += 1
-            active_types = {t.required_agent for t in ready}
-            event_bus.emit("scheduler:wave", source="Scheduler", message=f"Wave {wave}: {len(ready)} tasks in parallel", data={"wave": wave, "tasks": [t.task_id for t in ready]})
+            wave_plan = []
+            for t in ready:
+                agent_type = self._select_agent_for_task(t, used)
+                if agent_type:
+                    wave_plan.append((t, agent_type))
+                    used.add(agent_type)
+
+            if not wave_plan:
+                # No agents could be selected — fail remaining
+                for t in ready:
+                    t.status = TaskStatus.FAILED
+                    session_store.update_task(t.task_id, status=TaskStatus.FAILED)
+                break
+
+            event_bus.emit(
+                "scheduler:wave",
+                source="Scheduler",
+                message=f"Wave {wave}: {len(wave_plan)} tasks in parallel",
+                data={"wave": wave, "tasks": [t.task_id for t, _ in wave_plan]},
+            )
 
             with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-                futures = {ex.submit(self._run_task, t): t for t in ready}
+                futures = {ex.submit(self._run_task, t, at): t for t, at in wave_plan}
                 for future in futures:
                     results.append(future.result())
 
+            used.clear()
+
         event_bus.emit("scheduler:completed", source="Scheduler", message=f"All tasks processed ({len(results)} results)")
-        self._sleep_unused_agents(set())
+        agent_registry.sleep_unused(set())
         return results

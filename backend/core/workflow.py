@@ -1,17 +1,20 @@
-"""NeuroOps LangGraph workflow.
+"""NeuroOps LangGraph workflow (Phase 3).
 
 Defines the state graph that orchestrates the full pipeline:
 
   User Request
     -> CEO Agent (analyze)
+    -> Agent Registry (query + form team)
     -> Task Planner (plan)
-    -> Scheduler (activate agents + execute)
+    -> Scheduler (select best agents + execute)
+    -> AI Agents (work)
+    -> Memory System (store results)
     -> Result Collection
     -> CEO Agent (synthesize)
     -> Final Response
 
-Uses LangGraph's StateGraph. Falls back to a simple sequential runner
-if langgraph is not installed, so the workflow always works.
+Uses LangGraph's StateGraph. Falls back to a sequential runner if
+langgraph is not installed.
 """
 from __future__ import annotations
 
@@ -24,9 +27,9 @@ from core.storage import session_store
 
 
 class WorkflowState(TypedDict, total=False):
-    """State passed between LangGraph nodes."""
     request: str
     analysis: Dict[str, Any]
+    team: List[str]
     tasks: List[Dict[str, Any]]
     results: List[Dict[str, Any]]
     final_response: str
@@ -37,14 +40,13 @@ class WorkflowState(TypedDict, total=False):
 class NeuroOpsWorkflow:
     """Wraps the LangGraph state graph + a fallback sequential runner."""
 
-    def __init__(self):
-        self.scheduler = SchedulerService()
+    def __init__(self, max_workers: int = 4):
+        self.scheduler = SchedulerService(max_workers=max_workers)
         self.ceo = CEOAgent(scheduler=self.scheduler)
         self._graph = None
         self._build_graph()
 
     def _build_graph(self):
-        """Build the LangGraph StateGraph if available."""
         try:
             from langgraph.graph import StateGraph, END
         except ImportError:
@@ -54,13 +56,15 @@ class NeuroOpsWorkflow:
         g = StateGraph(WorkflowState)
 
         g.add_node("analyze", self._node_analyze)
+        g.add_node("form_team", self._node_form_team)
         g.add_node("plan", self._node_plan)
         g.add_node("schedule", self._node_schedule)
         g.add_node("collect", self._node_collect)
         g.add_node("synthesize", self._node_synthesize)
 
         g.set_entry_point("analyze")
-        g.add_edge("analyze", "plan")
+        g.add_edge("analyze", "form_team")
+        g.add_edge("form_team", "plan")
         g.add_edge("plan", "schedule")
         g.add_edge("schedule", "collect")
         g.add_edge("collect", "synthesize")
@@ -73,6 +77,10 @@ class NeuroOpsWorkflow:
         analysis = self.ceo.analyze_request(state["request"])
         return {"analysis": analysis}
 
+    def _node_form_team(self, state: WorkflowState) -> WorkflowState:
+        team = self.ceo.form_team(state["request"])
+        return {"team": team}
+
     def _node_plan(self, state: WorkflowState) -> WorkflowState:
         tasks = self.ceo.plan_tasks(state["request"])
         return {"tasks": [t.to_dict() for t in tasks]}
@@ -82,14 +90,9 @@ class NeuroOpsWorkflow:
         task_dicts = state.get("tasks", [])
         tasks = []
         for td in task_dicts:
-            t = Task(
-                task_id=td["task_id"],
-                title=td["title"],
-                description=td["description"],
-                required_agent=td["required_agent"],
-                dependencies=td["dependencies"],
-            )
-            tasks.append(t)
+            t = session_store.get_task(td["task_id"])
+            if t:
+                tasks.append(t)
         results = self.ceo.delegate(tasks)
         return {"results": [r.to_dict() for r in results]}
 
@@ -101,11 +104,7 @@ class NeuroOpsWorkflow:
         from core import AgentResult, AgentState, Task
         task_dicts = state.get("tasks", [])
         result_dicts = state.get("results", [])
-        tasks = []
-        for td in task_dicts:
-            t = session_store.get_task(td["task_id"])
-            if t:
-                tasks.append(t)
+        tasks = [session_store.get_task(td["task_id"]) for td in task_dicts if session_store.get_task(td["task_id"])]
         results = []
         for rd in result_dicts:
             results.append(AgentResult(
@@ -123,7 +122,6 @@ class NeuroOpsWorkflow:
 
     # ---- Public entry point ----
     def run(self, request: str) -> str:
-        """Execute the full workflow. Uses LangGraph if available, else sequential."""
         session_store.set_workflow_status("running")
         event_bus.emit("workflow:started", source="Workflow", message="NeuroOps workflow started")
 
@@ -137,7 +135,7 @@ class NeuroOpsWorkflow:
                 event_bus.emit("workflow:failed", source="Workflow", message=f"LangGraph error: {exc}")
                 raise
 
-        # Fallback: sequential runner (same logic, no langgraph dependency)
+        # Fallback: sequential runner
         try:
             final = self.ceo.run(request)
             session_store.set_workflow_status("completed")

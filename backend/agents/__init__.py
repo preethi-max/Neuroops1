@@ -1,4 +1,4 @@
-"""NeuroOps agents package - agent management blueprint."""
-from .routes import agents_bp
+"""NeuroOps agents package."""
+from .registry import agent_registry, AGENT_TYPES
 
-__all__ = ["agents_bp"]
+__all__ = ["agent_registry", "AGENT_TYPES"]

@@ -12,18 +12,8 @@ def setup_logging(level=logging.INFO):
     )
 
 
-def emit_event(socketio, event, payload, room=None):
-    """Safely emit a Socket.IO event."""
-    try:
-        socketio.emit(event, payload, room=room)
-        logger.debug("emitted %s: %s", event, payload)
-    except Exception as exc:  # pragma: no cover
-        logger.error("emit failed for %s: %s", event, exc)
-
-
 def handle_errors(fn):
     """Decorator returning JSON error responses instead of 500s."""
-    from functools import wraps
     from flask import jsonify
 
     @wraps(fn)

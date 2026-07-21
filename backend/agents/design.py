@@ -5,50 +5,35 @@ from core import Task
 from core.base_agent import BaseAgent
 
 
-class UISuggestionAgent(BaseAgent):
+class UIUXDesignerAgent(BaseAgent):
     department = "design"
-    description = "Suggests UI improvements and component layouts."
+    description = "Designs user interfaces, layouts, and user experiences."
+    capabilities = ["ui_design", "ux_research", "wireframing", "prototyping", "design_systems"]
+    tools = ["figma", "design_tokens", "color_palette"]
+    model_preference = "gemini"
 
     def think(self, task: Task) -> tuple[str, float]:
-        self.log("Analyzing UI requirements...")
-        suggestions = [
-            "## UI Suggestions",
-            "",
-            f"**Context:** {task.title}",
-            "",
-            "1. Use a consistent 8px spacing grid.",
-            "2. Ensure WCAG AA contrast ratios on all text.",
-            "3. Add hover and focus states to interactive elements.",
-            "4. Consider a sticky header for navigation.",
-            "5. Use progressive disclosure for complex forms.",
-        ]
-        self.log("Generated 5 UI suggestions.")
-        return "\n".join(suggestions), 0.79
+        self.log("Designing UI/UX...")
+        resp = self.call_model(
+            "You are a UI/UX designer. Propose a design approach with layout and interaction details.",
+            f"Task: {task.title}\nDescription: {task.description}",
+        )
+        self.log("UI/UX design proposed.")
+        return resp.content, resp.confidence
 
 
-class WireframeAgent(BaseAgent):
+class AccessibilityAgent(BaseAgent):
     department = "design"
-    description = "Produces text-based wireframe layouts."
+    description = "Audits and improves accessibility (WCAG, ARIA, contrast)."
+    capabilities = ["wcag_audit", "aria_review", "contrast_analysis", "screen_reader_testing"]
+    tools = ["axe_core", "lighthouse", "screen_reader"]
+    model_preference = "gemini"
 
     def think(self, task: Task) -> tuple[str, float]:
-        self.log("Drafting wireframe...")
-        wireframe = [
-            "## Wireframe",
-            "",
-            "+------------------------------------------+",
-            "|  [Logo]   Nav: Home  About  Contact      |",
-            "+------------------------------------------+",
-            "|                                          |",
-            "|   +------------------+  +-----------+    |",
-            "|   |  Main Content    |  |  Sidebar  |    |",
-            "|   |                  |  |           |    |",
-            "|   +------------------+  +-----------+    |",
-            "|                                          |",
-            "+------------------------------------------+",
-            "|              Footer                      |",
-            "+------------------------------------------+",
-            "",
-            f"Layout for: {task.title}",
-        ]
-        self.log("Wireframe complete.")
-        return "\n".join(wireframe), 0.75
+        self.log("Auditing accessibility...")
+        resp = self.call_model(
+            "You are an accessibility specialist. Identify WCAG issues and propose fixes.",
+            f"Task: {task.title}\nDescription: {task.description}",
+        )
+        self.log("Accessibility audit complete.")
+        return resp.content, resp.confidence
